@@ -261,20 +261,37 @@ function Select-TvFromScan($locals) {
     return $found[$idx - 1]
 }
 
+$script:SshOptionCache = @{}
+
 function Test-SshOption([string]$opt) {
     # OpenSSH antiguo no conoce algunas opciones: se comprueban antes de usarlas.
     # Ojo: si la entrada esta redirigida, ssh escribe un aviso por stderr y con
     # ErrorActionPreference=Stop eso se convertiria en error. Aqui no interesa.
+    if ($script:SshOptionCache.ContainsKey($opt)) {
+        return [bool]$script:SshOptionCache[$opt]
+    }
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         $null = & ssh -G -o $opt localhost 2>$null
-        return ($LASTEXITCODE -eq 0)
+        $ok = ($LASTEXITCODE -eq 0)
     } catch {
-        return $false
+        $ok = $false
     } finally {
         $ErrorActionPreference = $prev
     }
+    $script:SshOptionCache[$opt] = $ok
+    return $ok
+}
+
+function Get-PubkeyAlgName {
+    # OpenSSH 8.5 cambio PubkeyAcceptedKeyTypes por PubkeyAcceptedAlgorithms.
+    # Windows 10 20H2 (8.1) solo entiende el nombre viejo: si se usa el nuevo
+    # ssh termina con "Bad configuration option".
+    foreach ($name in @('PubkeyAcceptedAlgorithms', 'PubkeyAcceptedKeyTypes')) {
+        if (Test-SshOption ($name + '=ssh-rsa')) { return $name }
+    }
+    return ''
 }
 
 function Get-SshOpts {
@@ -289,12 +306,15 @@ function Get-SshOpts {
     )
     foreach ($pair in @(
         @('HostKeyAlgorithms', 'ssh-rsa'),
-        @('PubkeyAcceptedAlgorithms', 'ssh-rsa'),
         @('KexAlgorithms', 'diffie-hellman-group14-sha1'),
         @('MACs', 'hmac-sha1')
     )) {
         $opt = $pair[0] + '=+' + $pair[1]
         if (Test-SshOption $opt) { $o += @('-o', $opt) }
+    }
+    $pubkeyName = Get-PubkeyAlgName
+    if ($pubkeyName) {
+        $o += @('-o', ($pubkeyName + '=+ssh-rsa'))
     }
     return $o
 }
@@ -566,7 +586,12 @@ function Get-KeyAlgOpts {
     # OpenSSH 9.5 ofrece primero rsa-sha2-512/256; el sshd 6.1 de webOS solo
     # conoce ssh-rsa, y con varias ofertas agota MaxAuthTries. Se fija ssh-rsa
     # como UNICO algoritmo de firma para esta conexion.
-    if ($script:KeyIsRsa) { return @('-o', 'PubkeyAcceptedAlgorithms=ssh-rsa') }
+    # El nombre de la opcion depende de la version: Windows 10 20H2 (8.1) usa
+    # PubkeyAcceptedKeyTypes y rechaza PubkeyAcceptedAlgorithms.
+    if ($script:KeyIsRsa) {
+        $name = Get-PubkeyAlgName
+        if ($name) { return @('-o', ($name + '=ssh-rsa')) }
+    }
     return @()
 }
 
@@ -702,7 +727,16 @@ function Get-IpkVersion($path) {
     } catch {
         return ''
     } finally {
-        Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        # The archive extractor can remove/never create its staging folder on
+        # some Windows builds. Cleanup is optional and must never abort an
+        # otherwise valid TV installation.
+        if ($tmpDir -and (Test-Path -LiteralPath $tmpDir -PathType Container)) {
+            try {
+                Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction Stop
+            } catch {
+                # Temp cleanup failure is harmless; Windows clears it later.
+            }
+        }
     }
 }
 

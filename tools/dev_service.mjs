@@ -92,7 +92,18 @@ const server = http.createServer((req, res) => {
     dnsx.summary().forEach((entry) => {
       if (entry && entry.host && hosts.indexOf(entry.host) === -1) hosts.push(entry.host);
     });
-    return netdiag.run({ hosts }, (err, report) => done(err, report));
+    const screenW = Number(u.searchParams.get("screenW") || 0);
+    const screenH = Number(u.searchParams.get("screenH") || 0);
+    const screen = (screenW > 0 && screenH > 0)
+      ? {
+          w: screenW,
+          h: screenH,
+          scale: Number(u.searchParams.get("screenScale") || 0),
+          panelW: Number(u.searchParams.get("panelW") || 0),
+          panelH: Number(u.searchParams.get("panelH") || 0)
+        }
+      : null;
+    return netdiag.run({ hosts, screen }, (err, report) => done(err, report));
   }
   json(res, 404, { returnValue: false, errorText: "not found" });
 });

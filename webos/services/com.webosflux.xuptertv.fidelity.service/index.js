@@ -15,6 +15,7 @@ var proxy = require('./proxy');
 var relay = require('./ffmpeg-relay');
 var dnsx = require('./dnsx');
 var netdiag = require('./netdiag');
+var urlmod = require('url');
 
 var service = new Service(pkg.name);
 
@@ -132,31 +133,35 @@ function resolveStream(message, forceRelay) {
     if (useSmoothMode && !relay.available()) {
       return fail(message, new Error('Modo Fluido no disponible: ffmpeg no es ejecutable en esta TV'));
     }
-    if (useSmoothMode) {
-      var relayUrl = relay.register(stream, { hevc: isHevc, audio: Number(payload.audioTrack) || 0 });
-      console.log('[xuper-service] routing stream via ffmpeg relay: ' + relayUrl);
-      stream.proxyPath = relayUrl;
-      stream.mime = 'video/mp4';
-      stream.isRelay = true;
-      stream.isHls = false;
-      proxy.start(function () { /* the relay needs no media proxy; subtitles do */
-        respond(message, null, attachSubtitles(stream));
-      });
-      return;
-    }
+    var streamHost = (urlmod.parse(stream.url || '').hostname) || '';
+    dnsx.resolve(streamHost, function (dnsErr, dnsRes) {
+      var resolvedIp = (dnsRes && dnsRes.ips && dnsRes.ips[0]) || '';
 
-    proxy.start(function (perr, port) {
-      if (perr) { return fail(message, perr); }
-      var token = proxy.add(stream.url, stream.headers, stream.duration);
-      var extension = stream.mime === 'video/mp4' ? 'mp4' : 'ts';
-      /* The on-device HLS indexer is intentionally disabled: indexing long
-         VOD files in the webOS 4 service can retain enough memory to make the
-         system restart other foreground apps.  Direct ranged playback keeps
-         the service's memory bounded. */
-      stream.proxyPath = proxy.baseUrl() + '/media/' + token + '/stream.' + extension;
-      stream.isHls = false;
-      attachSubtitles(stream);
-      respond(message, null, stream);
+      if (useSmoothMode) {
+        proxy.start(function (perr, port) {
+          if (perr) { return fail(message, perr); }
+          var token = proxy.add(stream.url, stream.headers, stream.duration, resolvedIp);
+          var loopbackUrl = proxy.baseUrl() + '/media/' + token + '/stream.ts';
+          var relayUrl = relay.register({ url: loopbackUrl, headers: {} }, { hevc: isHevc, audio: Number(payload.audioTrack) || 0 });
+          console.log('[xuper-service] routing stream via ffmpeg relay: ' + relayUrl + ' (source via loopback proxy: ' + loopbackUrl + ')');
+          stream.proxyPath = relayUrl;
+          stream.mime = 'video/mp4';
+          stream.isRelay = true;
+          stream.isHls = false;
+          respond(message, null, attachSubtitles(stream));
+        });
+        return;
+      }
+
+      proxy.start(function (perr, port) {
+        if (perr) { return fail(message, perr); }
+        var token = proxy.add(stream.url, stream.headers, stream.duration, resolvedIp);
+        var extension = stream.mime === 'video/mp4' ? 'mp4' : 'ts';
+        stream.proxyPath = proxy.baseUrl() + '/media/' + token + '/stream.' + extension;
+        stream.isHls = false;
+        attachSubtitles(stream);
+        respond(message, null, stream);
+      });
     });
   });
 }
@@ -215,12 +220,16 @@ service.register('resolveLive', function (message) {
   if (!payload.channelCode) { return fail(message, new Error('channelCode requerido')); }
   magis.resolveLive(payload.channelCode, function (err, stream) {
     if (err) { return fail(message, err); }
-    proxy.start(function (perr) {
-      if (perr) { return fail(message, perr); }
-      var token = proxy.add(stream.url, stream.headers, 0);
-      stream.proxyPath = proxy.baseUrl() + '/media/' + token + '/stream.m3u8';
-      stream.isHls = true;
-      respond(message, null, stream);
+    var streamHost = (urlmod.parse(stream.url || '').hostname) || '';
+    dnsx.resolve(streamHost, function (dnsErr, dnsRes) {
+      var resolvedIp = (dnsRes && dnsRes.ips && dnsRes.ips[0]) || '';
+      proxy.start(function (perr) {
+        if (perr) { return fail(message, perr); }
+        var token = proxy.add(stream.url, stream.headers, 0, resolvedIp);
+        stream.proxyPath = proxy.baseUrl() + '/media/' + token + '/stream.m3u8';
+        stream.isHls = true;
+        respond(message, null, stream);
+      });
     });
   });
 });
@@ -252,17 +261,30 @@ service.register('netdiag', function (message) {
   if (constants.HOSTS && constants.HOSTS.length) {
     hosts = constants.HOSTS.slice(0);
   }
-  /* CDN hosts seen recently are the ones that actually serve the video. */
+  /* CDN hosts seen recently are the ones that actually serve the video.  Stale
+     entries would make an old, already-changed CDN look like a network fault. */
   var cached = dnsx.summary();
   for (var i = 0; i < cached.length; i++) {
-    if (cached[i] && cached[i].host && hosts.indexOf(cached[i].host) === -1) {
+    if (cached[i] && cached[i].host && cached[i].ageMs < 120000 && hosts.indexOf(cached[i].host) === -1) {
       hosts.push(cached[i].host);
     }
   }
   if (payload.hosts && payload.hosts.length) {
     hosts = payload.hosts.concat(hosts);
   }
-  netdiag.run({ hosts: hosts }, function (err, report) {
+  /* The page reports its real viewport so a cropped UI can be diagnosed from
+     a photo of this screen (720p / 2K / 4K sets differ). */
+  var screen = null;
+  if (Number(payload.screenW) > 0 && Number(payload.screenH) > 0) {
+    screen = {
+      w: Number(payload.screenW),
+      h: Number(payload.screenH),
+      scale: Number(payload.screenScale) || 0,
+      panelW: Number(payload.panelW) || 0,
+      panelH: Number(payload.panelH) || 0
+    };
+  }
+  netdiag.run({ hosts: hosts, screen: screen }, function (err, report) {
     if (err) { return fail(message, err); }
     report.version = pkg.version;
     respond(message, null, report);

@@ -596,7 +596,8 @@ function isCfl(url) {
 
 function withScheme(addr) {
   var clean = trim(addr).replace(/\/+$/, '');
-  return /^https?:\/\//.test(clean) ? clean : 'https://' + clean;
+  clean = clean.replace(/^http:\/\//i, 'https://');
+  return /^https:\/\//.test(clean) ? clean : 'https://' + clean;
 }
 
 function vodCdns(slb) {

@@ -33,7 +33,9 @@ var PROVIDERS = [
   { ip: '1.1.1.1', sni: 'cloudflare-dns.com', path: '/dns-query' },
   { ip: '1.0.0.1', sni: 'cloudflare-dns.com', path: '/dns-query' },
   { ip: '8.8.8.8', sni: 'dns.google', path: '/resolve' },
-  { ip: '8.8.4.4', sni: 'dns.google', path: '/resolve' }
+  { ip: '8.8.4.4', sni: 'dns.google', path: '/resolve' },
+  { ip: '94.140.14.14', sni: 'dns.adguard-dns.com', path: '/resolve' },
+  { ip: '94.140.15.15', sni: 'dns.adguard-dns.com', path: '/resolve' }
 ];
 
 var cache = {};        // host -> { ips:[], at, ttl, source }
@@ -335,6 +337,8 @@ module.exports = {
   setMode: setMode,
   mode: function () { return mode; },
   clearCache: clearCache,
+  cached: cached,
+  dial: dial,
   summary: summary,
   isIpv4: isIpv4,
   providers: PROVIDERS

@@ -3891,3 +3891,13 @@ div, section, span { outline: none; }
   line-height: 29px;
   color: #858d94;
 }
+
+/* Viewport line: lets a photo of this panel tell whether a 720p / 2K / 4K TV
+   received a scaled canvas or a cropped one. */
+.dg-env {
+  font-size: 20px;
+  line-height: 32px;
+  color: #6f7780;
+  white-space: nowrap;
+  overflow: hidden;
+}

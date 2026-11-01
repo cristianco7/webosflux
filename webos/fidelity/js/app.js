@@ -3819,13 +3819,14 @@ function portalServiceCall(method, params, done) {
      of every portal/CDN host and shows where the connection breaks.  The
      bypass itself lives in the service (dnsx.js) and needs no user action. */
   var netdiagState = { running: false, report: null, error: null };
+  var netdiagEnv = null;
 
   function netdiagStateText(host) {
     if (!host) { return 'Sin datos'; }
     switch (host.verdict) {
       case 'ok': return 'Correcto';
       case 'dns-distinto': return 'DNS alterado';
-      case 'dns-local-falla': return 'DNS del TV falla';
+      case 'dns-local-falla': return 'Bloqueado';
       case 'sin-tcp': return 'Sin conexión';
       case 'tls-falla': return 'HTTPS falla';
       default: return 'Sin datos';
@@ -3846,13 +3847,15 @@ function portalServiceCall(method, params, done) {
       case 'dns-distinto':
         return { cls: 'warn', text: 'Tu operador devuelve direcciones distintas a las reales (bloqueo por DNS). La app ya las esquiva sola.' };
       case 'dns-local-falla':
-        return { cls: 'warn', text: 'El DNS del televisor no encuentra estos dominios. La app los resuelve por DNS seguro.' };
+        return { cls: 'warn', text: 'Tu operador bloquea el DNS del televisor (no devuelve estos dominios). La app ya lo esquiva con su DNS seguro.' };
       case 'doh-sin-respuesta':
         return { cls: 'bad', text: 'El DNS seguro no devolvió respuesta. Revisa la conexión del televisor.' };
       case 'doh-bloqueado':
         return { cls: 'bad', text: 'La red bloquea el DNS seguro (Cloudflare y Google por HTTPS).' };
       case 'sin-salida':
         return { cls: 'bad', text: 'Los servidores no aceptan la conexión desde esta red.' };
+      case 'algun-servidor':
+        return { cls: 'warn', text: 'Un servidor de vídeo no respondió (suele rotar). El resto del catálogo sí responde: vuelve a analizar.' };
       default:
         return { cls: '', text: 'Sin resultado todavía.' };
     }
@@ -3892,6 +3895,16 @@ function portalServiceCall(method, params, done) {
     if (okProviders.length) { dnsRow.className = 'dg-row dns ok'; }
     else { dnsRow.className = 'dg-row dns bad'; }
     list.appendChild(dnsRow);
+
+    if (netdiagEnv) {
+      var s = report.screen || {};
+      var parts = [];
+      if (s.w && s.h) { parts.push('Pantalla ' + s.w + '×' + s.h); }
+      if (s.panelW && s.panelH) { parts.push('panel ' + s.panelW + '×' + s.panelH); }
+      if (s.scale) { parts.push('escala ' + (Math.round(s.scale * 100) / 100)); }
+      if (report.version) { parts.push('versión ' + report.version); }
+      netdiagEnv.textContent = parts.join(' · ');
+    }
   }
 
   function runNetdiag(button, summary, list) {
@@ -3903,7 +3916,13 @@ function portalServiceCall(method, params, done) {
     summary.textContent = 'Consultando el DNS del televisor, el DNS seguro y los servidores…';
     clear(list);
 
-    portalServiceCall('netdiag', {}, function (error, payload) {
+    portalServiceCall('netdiag', (function () {
+      var vp = window.__xuperViewport || {};
+      return {
+        screenW: vp.w || 0, screenH: vp.h || 0, screenScale: vp.scale || 0,
+        panelW: vp.panelW || 0, panelH: vp.panelH || 0
+      };
+    })(), function (error, payload) {
       netdiagState.running = false;
       button.textContent = 'Analizar de nuevo';
       if (button.parentNode && button.parentNode.className.indexOf('is-active') !== -1) { setFocus(button); }
@@ -3940,10 +3959,15 @@ function portalServiceCall(method, params, done) {
     var list = el('div', 'dg-list');
     abs(list, 52, 378, 1380, 450);
 
+    var envLine = el('div', 'dg-env', '');
+    abs(envLine, 52, 832, 1380, 32);
+    netdiagEnv = envLine;
+
     var foot = el('div', 'dg-foot',
-      'Si el estado dice "DNS alterado", el operador está interceptando los nombres pero la app ya conecta por la dirección real. ' +
-      'En el reproductor Normal el vídeo usa este mismo DNS seguro. En Modo Fluido, FFmpeg resuelve por el DNS del televisor.');
-    abs(foot, 52, 876, 1380, 140);
+      'Si el estado dice "Bloqueado", tu operador está interceptando el nombre del servidor, pero la app ya conecta por la dirección real. ' +
+      'El reproductor Normal y el Modo Fluido usan este mismo DNS seguro. ' +
+      'Si el vídeo sigue sin abrir con la conexión en verde, el bloqueo es por dirección: hace falta un túnel (VPN local).');
+    abs(foot, 52, 872, 1380, 150);
 
     button._activate = function () { runNetdiag(button, summary, list); };
     /* Opening the panel runs the test once: the people who need it are not
@@ -3957,6 +3981,7 @@ function portalServiceCall(method, params, done) {
     p.appendChild(summary);
     p.appendChild(head);
     p.appendChild(list);
+    p.appendChild(envLine);
     p.appendChild(foot);
     return p;
   }
@@ -4794,7 +4819,10 @@ function portalServiceCall(method, params, done) {
       state.playerEpisodeRange = Math.floor(currentIndex / 20);
     }
     var range = ranges[state.playerEpisodeRange] || ranges[0];
-    var numberRow = el('div', 'psv-episode-numbers');
+    /* reveal() only follows .scrollable containers.  Without this class the
+       d-pad could focus episode 16+ outside the visible row, making a
+       20-episode page look capped around fifteen entries. */
+    var numberRow = el('div', 'psv-episode-numbers scrollable');
     for (var i = range.start; i < range.end; i++) {
       (function (ep, idx) {
         var label = idx === currentIndex ? '▶' : String(ep.number !== undefined && ep.number !== null ? ep.number : idx + 1);
@@ -4804,7 +4832,7 @@ function portalServiceCall(method, params, done) {
       })(episodes[i], i);
     }
     psvEpisodesRow.appendChild(numberRow);
-    var rangeRow = el('div', 'psv-episode-ranges');
+    var rangeRow = el('div', 'psv-episode-ranges scrollable');
     for (var r = 0; r < ranges.length; r++) {
       (function (idx, part) {
         var btn = el('button', 'psv-range-btn focusable' + (idx === state.playerEpisodeRange ? ' is-selected' : ''),
@@ -5374,21 +5402,57 @@ function portalServiceCall(method, params, done) {
     return c ? (c.charAt(0).toUpperCase() + c.slice(1)) : 'Pista';
   }
 
+  /* A direct MP4/TS source must stay direct when the viewer selects an audio
+     language.  Some webOS media pipelines expose the native AudioTrackList;
+     in that case the change is immediate and does not need FFmpeg.  Older
+     sets expose no writable list, so we leave the existing source untouched
+     instead of silently changing the player to Modo Fluido. */
+  function selectNativeAudioTrack(trackIndex) {
+    if (!playerVideo) { return false; }
+    var tracks;
+    try { tracks = playerVideo.audioTracks; } catch (eTracks) { return false; }
+    if (!tracks || !tracks.length || !(trackIndex >= 0 && trackIndex < tracks.length)) {
+      return false;
+    }
+    try {
+      for (var i = 0; i < tracks.length; i++) {
+        tracks[i].enabled = (i === trackIndex);
+      }
+      return true;
+    } catch (eSelect) {
+      return false;
+    }
+  }
+
   function switchAudioTrack(trackIndex) {
+    /* On the detail screen the choice is only remembered for the next play. */
+    if (state.screen !== 'player' || !playerVideo) {
+      vodCurrentAudioTrack = trackIndex;
+      vodAudioChosen = true;
+      return;
+    }
+    /* Normal (Directo) must never be converted to Fluido merely by opening
+       the audio selector.  Use the native track list when webOS provides it.
+       A TV without that API keeps its playing source and clearly tells the
+       viewer that a remux is required for per-track selection. */
+    if (state.streamMode !== 'relay' && state.streamMode !== 'smooth') {
+      if (selectNativeAudioTrack(trackIndex)) {
+        vodCurrentAudioTrack = trackIndex;
+        vodAudioChosen = true;
+        setPlayerStatus('Idioma cambiado');
+      } else {
+        setPlayerStatus('Esta TV no permite cambiar audio en Normal. Usa Modo Fluido para esa pista.');
+      }
+      return;
+    }
     vodCurrentAudioTrack = trackIndex;
     vodAudioChosen = true;
-    /* On the detail screen the choice is only remembered for the next play. */
-    if (state.screen !== 'player' || !playerVideo) { return; }
     /* HTML5 cannot pick a PID inside a TS/MP4, so the FFmpeg relay maps it
-       with -map 0:a:<n>.  A direct stream has to move to the relay. */
+       with -map 0:a:<n>. */
     if (relayBaseUrl) {
       var curSec = relayStartOffset + (playerVideo.currentTime || 0);
       playUrl(relayBaseUrl + '?start=' + Math.floor(curSec) + '&a=' + trackIndex);
       return;
-    }
-    if (state.streamMode !== 'relay' && state.streamMode !== 'smooth') {
-      state.streamMode = 'relay';
-      renderPlaySettingPlayerOptions();
     }
     restartCurrentPlayback();
   }
@@ -6220,13 +6284,16 @@ function portalServiceCall(method, params, done) {
       }
       /* Some portal VOD files are rejected by a TV's direct TS pipeline even
          though the same HEVC/AAC content plays when remuxed as fragmented MP4.
-         Retry once through the protected Modo Fluido route, never in a loop. */
+         Retry once through the protected Modo Fluido route, never in a loop.
+         The retry belongs to this episode only: remembering it for the whole
+         series opened every following episode in Modo Fluido even after the
+         viewer picked Normal. */
       if (code === 4 && state.playerMode === 'vod' && state.streamMode === 'normal' && state.playerItem) {
         var failedItem = state.playerItem;
-        var failedKey = smoothModeKey(failedItem);
+        var failedKey = mediaInfoKey(failedItem) || smoothModeKey(failedItem);
         if (autoSmoothFallbackKey !== failedKey) {
           autoSmoothFallbackKey = failedKey;
-          setSmoothMode(failedItem, true);
+          state.streamMode = 'smooth';
           setPlayerStatus('Reintentando película en modo compatible…');
           setTimeout(function () {
             if (state.playerMode === 'vod' && state.playerItem === failedItem && state.streamMode === 'smooth') {
@@ -6249,6 +6316,16 @@ function portalServiceCall(method, params, done) {
     playerVideo.oncanplay = function () { releaseRelaySeek(); clearStatus(); };
     playerVideo.onloadedmetadata = function () {
       clearStatus();
+      /* Prefer Spanish on the direct path as well.  Android chooses this PID
+         internally; on webOS it is exposed only when the native AudioTrackList
+         becomes available with the loaded media metadata. */
+      if (state.playerMode === 'vod' && state.streamMode === 'normal') {
+        var audioInfo = (state.playerItem && state.playerItem.streamAudioInfo);
+        var nativeTrack = vodAudioChosen ? vodCurrentAudioTrack : preferredAudioIndex(audioInfo);
+        if (selectNativeAudioTrack(nativeTrack)) {
+          vodCurrentAudioTrack = nativeTrack;
+        }
+      }
       if (state.playerMode === 'vod') {
         var cur = relayBaseUrl ? relayStartOffset : (playerVideo.currentTime || 0);
         var vidDur = (playerVideo && isFinite(playerVideo.duration) && playerVideo.duration > 0) ? playerVideo.duration : 0;
@@ -6387,8 +6464,15 @@ function portalServiceCall(method, params, done) {
       /* Prefer the Spanish PID like the real app when mediaInfo already
          answered; the relay maps it with ffmpeg -map 0:a:<n>. */
       var cachedInfo = mediaInfoCache[mediaInfoKey(item)];
-      if (cachedInfo && !vodAudioChosen) {
-        vodCurrentAudioTrack = preferredAudioIndex(cachedInfo.audio);
+      /* Spanish is the default for every episode.  Index 0 is NOT Spanish:
+         the portal lists the PIDs in stream order ("por,spa,eng"), so sending
+         0 after an episode change made playback start in Portuguese (and the
+         FFmpeg relay map the Portuguese PID). */
+      var audioList = (cachedInfo && cachedInfo.audio) || item.streamAudioInfo || '';
+      if (vodAudioChosen) {
+        vodCurrentAudioTrack = Math.max(0, Number(vodCurrentAudioTrack) || 0);
+      } else {
+        vodCurrentAudioTrack = preferredAudioIndex(audioList);
       }
       params.audioTrack = vodCurrentAudioTrack || 0;
       if (isSeriesItem(item)) {
@@ -6422,8 +6506,20 @@ function portalServiceCall(method, params, done) {
           item.duration = item.duration || 0;
         }
         item.subtitles = payload.subtitles || [];
-        item.streamAudioInfo = payload.audio || '';
+        item.streamAudioInfo = payload.audio || item.streamAudioInfo || '';
         item.isHls = !!payload.isHls;
+        /* resolve already completed startPlayVOD.  Reuse its audio/subtitle
+           metadata in the panel instead of requesting the same episode a
+           second time when the viewer changes chapters. */
+        var resolvedInfo = {
+          audio: item.streamAudioInfo,
+          subtitles: item.subtitles,
+          tracks: payload.availableTracks || [],
+          selected: payload.selectedTrack || {},
+          duration: payload.duration || 0
+        };
+        mediaInfoCache[mediaInfoKey(item)] = resolvedInfo;
+        applySubtitleDefaults(resolvedInfo);
         /* Read-only local diagnostics for the webOS inspector.  Do not place
            the stream URL, licence or headers here. */
         try {
@@ -6459,9 +6555,34 @@ function portalServiceCall(method, params, done) {
     if (!it) { return; }
     vodAudioChosen = false;
     vodCurrentAudioTrack = 0;
-    /* Fetch real audio/subtitle tracks so the first Down press already has
-       the languages and renditions instead of guessing them. */
-    ensureMediaInfo(it);
+    /* resolvePlayerStream returns the same audio/subtitle metadata needed by
+       the dialog.  Do not issue mediaInfo in parallel here: on every episode
+       change that duplicated startPlayVOD and delayed the next chapter.  It is
+       only requested while the audio PID order is still unknown, because the
+       portal lists it in stream order (index 0 is not Spanish) and Modo Fluido
+       maps that index inside FFmpeg. */
+    var knownAudio = (it.streamAudioInfo) ||
+      ((mediaInfoCache[mediaInfoKey(it)] || {}).audio) || '';
+    if (it._portal && !vodAudioChosen && !knownAudio) {
+      var started = false;
+      var startSeq = resolveSeq;
+      var proceed = function () {
+        if (started || startSeq !== resolveSeq) { return; }
+        started = true;
+        var epNum = episode ? (episode.number || episode.seriesNumber || '') : '';
+        setPlayerStatus(epNum ? ('Cargando capítulo ' + epNum + '…') : 'Cargando capítulo…');
+        resolvePlayerStream(it, function (url) {
+          if (url) { playUrl(url); }
+          else if (!state.streamError) { setPlayerStatus('Sin fuente de reproducción'); }
+        });
+      };
+      /* Never hold playback on the metadata call: after 2.5 s resolve anyway. */
+      setTimeout(proceed, 2500);
+      ensureMediaInfo(it, function (info) {
+        proceed();
+      });
+      return;
+    }
     if (it._portal) {
       var epNum = episode ? (episode.number || episode.seriesNumber || '') : '';
       setPlayerStatus(epNum ? ('Cargando capítulo ' + epNum + '…') : 'Cargando capítulo…');
@@ -6773,13 +6894,41 @@ function portalServiceCall(method, params, done) {
      logical viewport, whereas some UHD webOS 22/25 sets expose 3840×2160.
      Without this fit pass only the left half of the fixed canvas is painted
      and the right half of the TV remains black. */
+  function viewportSize() {
+    var doc = document.documentElement || {};
+    var vw = doc.clientWidth || window.innerWidth || 0;
+    var vh = doc.clientHeight || window.innerHeight || 0;
+    if (!vw || !vh) {
+      vw = window.innerWidth || screen.width || 1920;
+      vh = window.innerHeight || screen.height || 1080;
+    }
+    /* Some webOS builds (mostly 720p and 2K panels) keep the app's declared
+       1920x1080 window size even though the screen can only show 1280 or 1440
+       CSS px, and the set then crops the right/bottom of the canvas.  Compare
+       with the physical panel (in CSS px) and never draw wider than it.
+       Only when the window claims design-canvas size or more: a normal window
+       smaller than 1920x1080 needs no correction. */
+    var dpr = window.devicePixelRatio || 1;
+    var panelW = Math.floor((screen.width || 0) / dpr);
+    var panelH = Math.floor((screen.height || 0) / dpr);
+    var panel = null;
+    if (panelW > 0 && panelH > 0) {
+      panel = { w: panelW, h: panelH };
+      if (vw >= 1920 && panelW < vw) { vw = panelW; }
+      if (vh >= 1080 && panelH < vh) { vh = panelH; }
+    }
+    return { w: vw, h: vh, panel: panel };
+  }
+
   function fitDesignViewport() {
     var app = $('app');
     if (!app) { return; }
-    var vw = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 1920;
-    var vh = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 1080;
+    var size = viewportSize();
+    var vw = size.w;
+    var vh = size.h;
     var scale = Math.min(vw / 1920, vh / 1080);
     if (!isFinite(scale) || scale <= 0) { scale = 1; }
+    scale = Math.round(scale * 10000) / 10000;
     /* Keep a non-16:9 display letterboxed instead of stretching the design. */
     var left = Math.max(0, Math.round((vw - (1920 * scale)) / 2));
     var top = Math.max(0, Math.round((vh - (1080 * scale)) / 2));
@@ -6787,12 +6936,26 @@ function portalServiceCall(method, params, done) {
     app.style.top = top + 'px';
     app.style.webkitTransform = 'scale(' + scale + ')';
     app.style.transform = 'scale(' + scale + ')';
+    /* Read by the network diagnostics panel: a photo of that screen tells
+       which viewport the TV really gave the app (720p / 2K / 4K sets differ). */
+    window.__xuperViewport = {
+      w: vw, h: vh, scale: scale,
+      panelW: size.panel ? size.panel.w : 0,
+      panelH: size.panel ? size.panel.h : 0
+    };
   }
 
   /* ------------------------------------------------------------------ boot */
   function boot() {
     fitDesignViewport();
     window.addEventListener('resize', fitDesignViewport, false);
+    window.addEventListener('orientationchange', fitDesignViewport, false);
+    document.addEventListener('visibilitychange', fitDesignViewport, false);
+    /* Some webOS builds only report the final window size after the splash
+       animation, and 720p / 2K sets take longer than 1080p ones. */
+    setTimeout(fitDesignViewport, 250);
+    setTimeout(fitDesignViewport, 1200);
+    setTimeout(fitDesignViewport, 3000);
     document.addEventListener('keydown', handleKey, false);
     document.addEventListener('keyup', function (e) {
       var code = e.keyCode || e.which;

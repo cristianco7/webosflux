@@ -197,23 +197,35 @@ function verdictOf(hosts, providers) {
   var reachable = 0;
   var anyDoh = false;
   var anyMismatch = false;
+  var anyLocalFail = false;
   var anyTcpFail = false;
+  var tcpFailCount = 0;
   for (var i = 0; i < providers.length; i++) {
     if (providers[i].reachable) { reachable++; }
   }
   for (var j = 0; j < hosts.length; j++) {
     if (hosts[j].doh.ok) { anyDoh = true; }
     if (hosts[j].mismatch) { anyMismatch = true; }
-    if (hosts[j].verdict === 'sin-tcp' || hosts[j].verdict === 'tls-falla') { anyTcpFail = true; }
+    if (hosts[j].verdict === 'dns-local-falla') { anyLocalFail = true; }
+    if (hosts[j].verdict === 'sin-tcp' || hosts[j].verdict === 'tls-falla') {
+      anyTcpFail = true;
+      tcpFailCount++;
+    }
   }
   if (!reachable) { return 'doh-bloqueado'; }
-  if (anyTcpFail) { return 'sin-salida'; }
+  /* A rotating CDN always leaves one address cold; only a total failure means
+     the network cannot reach the service at all. */
+  if (anyTcpFail && tcpFailCount >= hosts.length) { return 'sin-salida'; }
   if (anyMismatch) { return 'dns-distinto'; }
+  /* The ISP resolver answered nothing at all: that is a DNS block even when
+     DoH saves the day, and the viewer must be told so. */
+  if (anyLocalFail) { return 'dns-local-falla'; }
+  if (anyTcpFail) { return 'algun-servidor'; }
   if (!anyDoh) { return 'doh-sin-respuesta'; }
   return 'ok';
 }
 
-/* run({hosts:[...]}, cb) -> report */
+/* run({hosts:[...], screen:{w,h,scale}}, cb) -> report */
 function run(options, cb) {
   options = options || {};
   var hosts = (options.hosts || []).filter(function (h) { return typeof h === 'string' && h; });
@@ -240,7 +252,8 @@ function run(options, cb) {
         verdict: verdictOf(hostResults, providers),
         providers: providers,
         hosts: hostResults,
-        cache: dnsx.summary()
+        cache: dnsx.summary(),
+        screen: options.screen || null
       });
     });
   });

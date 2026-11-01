@@ -102,6 +102,15 @@ SI ALGO FALLA
     - la IP cambio,
     - o la clave caduco (el Modo Desarrollador dura 50 horas).
 
+  Si te sale "Bad configuration option: pubkeyacceptedalgorithms": estabas
+  usando un instalador viejo en un Windows con OpenSSH antiguo. Esta version
+  se adapta sola; extrae el ZIP completo en una carpeta limpia y repite.
+
+  Si la imagen de la app se sale de la pantalla, revisa en la TV
+  Ajustes - Imagen - Relacion de aspecto - Solo escaneo (Just Scan). Si sigue
+  igual, entra en la app a Ajustes - Diagnostico y manda una foto de esa
+  pantalla: la ultima linea indica el tamano de pantalla que la TV entrego.
+
 IMPORTANTE
   No ejecutes el instalador desde dentro del ZIP: extrae la carpeta
   completa primero. El archivo .ipk tiene que estar junto al .bat.
